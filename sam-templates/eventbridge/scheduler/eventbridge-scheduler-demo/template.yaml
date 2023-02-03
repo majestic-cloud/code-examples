@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  eventbridge-scheduler-demo
+
+  Sample SAM Template for eventbridge-scheduler-demo
+  
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  ScheduledFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: scheduled_function/
+      Handler: app.lambdaHandler
+      Runtime: nodejs16.x
+      Architectures:
+        - x86_64
+      Events:
+        ScheduledEventSource:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(2 minutes)
+            FlexibleTimeWindow:
+              Mode: FLEXIBLE
+              MaximumWindowInMinutes: 15
+            StartDate: '2023-02-03T13:15:00.000Z'
+            EndDate: '2023-02-03T14:00:00.000Z'
+            ScheduleExpressionTimezone: Europe/Bucharest
+            Input: '{ "action": "dosomething"}'
+

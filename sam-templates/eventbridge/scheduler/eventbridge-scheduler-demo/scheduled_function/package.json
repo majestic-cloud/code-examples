@@ -1,0 +1,9 @@
+{
+  "name": "eventbridge_scheduler",
+  "version": "1.0.0",
+  "description": "EventBridge Scheduler Demo",
+  "main": "app.js",
+  "repository": "https://github.com/majestic-cloud/code-examples",
+  "author": "SAM CLI",
+  "license": "MIT"
+}
