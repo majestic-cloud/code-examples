@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  # This is the API Gateway that will receive the orders to it's endpoint
+  OrdersAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      EndpointConfiguration: 
+        Type: REGIONAL
+      StageName: Prod
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: OrdersAPI
+        paths:
+          /order:
+            post:
+              consumes:
+              - "application/json"
+              produces:
+              - "application/json"
+              responses:
+                "200":
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+              x-amazon-apigateway-integration:
+                type: aws
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:events:action/PutEvents"
+                credentials: !GetAtt "APIGatewayExecutionRole.Arn"
+                httpMethod: "POST"
+                responses:
+                  default:
+                    statusCode: "200"
+                requestTemplates:
+                  application/json: !Sub
+                    - |- 
+                      #set($context.requestOverride.header.X-Amz-Target = "AWSEvents.PutEvents")
+                      #set($context.requestOverride.header.Content-Type = "application/x-amz-json-1.1")            
+                      #set($inputRoot = $input.path('$')) 
+                      { 
+                        "Entries": [
+                          #foreach($element in $inputRoot.order)
+                          {
+                            "Detail": "$util.escapeJavaScript($element.products).replaceAll("\\'","'")",
+                            "DetailType": "OrdersAPIGateway",
+                            "EventBusName": "${EventBusName}",
+                            "Source":"com.majestic.orders"
+                          }#if($foreach.hasNext),#end
+                          #end
+                        ]
+                      }
+                    - { EventBusName: !Ref OrderEventsBus }
+                passthroughBehavior: "when_no_templates"
+
+  # This is the API Gateway Execution Role
+  APIGatewayExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+      Policies:
+        - PolicyName: APIGatewayEventBridgePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/OrderEventsBus"
+
+  # This is our EventBus
+  OrderEventsBus:
+    Type: AWS::Events::EventBus
+    Properties: 
+      Name: OrderEventsBus
+
+  # Lambda Function that has an event rule attached. It will get an event every time the pattern is matched
+  ProcessorLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: orderProcessor.processOrder
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          EventBusName: !Ref OrderEventsBus          
+      Events:
+        ProcessorEvent:
+          Type: EventBridgeRule
+          Properties: 
+            EventBusName: !Ref OrderEventsBus
+            Pattern: {"source" : [{ "prefix": "com.majestic.orders" }]}
+
+  # this is the shipping confirmation state machine, this simulates shipping and confirmation of shipping for the product
+  ShippingConfirmationMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: TaskState
+        States:
+          TaskState:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: ${FunctionArn}
+              Payload.$: $
+            End: true  
+            
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: '*'
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ShippingFunction
+      Tracing:
+        Enabled: true
+      Type: STANDARD
+      DefinitionSubstitutions:
+        FunctionArn: !GetAtt ShippingFunction.Arn
+      Events:
+        ShippingEvent:
+          Type: EventBridgeRule
+          Properties: 
+            EventBusName: !Ref OrderEventsBus
+            Pattern: {"source" : [{ "prefix": "com.majestic.orders" }]}
+
+  # this is the shipping lambda function which is invoked by the Step Functions state machine
+  ShippingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: shipping.handler
+      Runtime: nodejs16.x
+      MemorySize: 128
+      Timeout: 5
+
+  # Event Rule for CloudWatch Logs, this time separately in CloudFormation syntax so you know how to set it up this way too
+  # this one will intercept all events so we can easily debug our app / you can use Events Archives and Replays for this as well
+  EventRuleToCloudWatch:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: EventRuleToCloudWatch
+      EventBusName: !Ref OrderEventsBus
+      EventPattern: {"source" : [{ "prefix": "" }]}
+      Targets:
+        -
+          Arn: !GetAtt CloudWatchLogGroupForEventBridgeOrders.Arn
+          Id: TargetCloudWatch
+  
+  # CloudWatch Log Group where we will send all events
+  CloudWatchLogGroupForEventBridgeOrders:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: OrdersAPI/Events
+      RetentionInDays: 14
+
+  PermissionPolicyForCloudWatchLogsUsage:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: EventBridgeToCloudWatchLogsPolicy
+      PolicyDocument: !Sub >
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EventBridgeToCloudWatchLogsPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:CreateLogStream"
+              ],
+              "Resource": [
+                "${CloudWatchLogGroupForEventBridgeOrders.Arn}"
+              ]
+            },
+            {
+              "Sid": "EventBridgetoCWLogsPutLogEventsPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:PutLogEvents"
+              ],
+              "Resource": [
+                "${CloudWatchLogGroupForEventBridgeOrders.Arn}"
+              ],
+              "Condition": {
+                "ArnEquals": {"AWS:SourceArn": "${EventRuleToCloudWatch.Arn}"}
+              }
+            }
+          ]
+        } 
