@@ -26,8 +26,8 @@ Resources:
             FlexibleTimeWindow:
               Mode: FLEXIBLE
               MaximumWindowInMinutes: 15
-            StartDate: '2023-02-03T13:15:00.000Z'
-            EndDate: '2023-02-03T14:00:00.000Z'
+            StartDate: '2023-02-03T16:20:00.000Z'
+            EndDate: '2023-02-03T17:00:00.000Z'
             ScheduleExpressionTimezone: Europe/Bucharest
             Input: '{ "action": "dosomething"}'
 
