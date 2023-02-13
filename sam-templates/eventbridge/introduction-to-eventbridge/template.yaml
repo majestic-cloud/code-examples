@@ -13,7 +13,7 @@ Resources:
         info:
           title: OrdersAPI
         paths:
-          /order:
+          /orders:
             post:
               consumes:
               - "application/json"
@@ -43,7 +43,7 @@ Resources:
                           #foreach($element in $inputRoot.order)
                           {
                             "Detail": "$util.escapeJavaScript($element.products).replaceAll("\\'","'")",
-                            "DetailType": "OrdersAPIGateway",
+                            "DetailType": "order",
                             "EventBusName": "${EventBusName}",
                             "Source":"com.majestic.orders"
                           }#if($foreach.hasNext),#end
